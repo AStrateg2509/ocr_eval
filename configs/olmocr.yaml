@@ -1,0 +1,27 @@
+# olmOCR от AllenAI — пайплайн, основанный на Qwen2-VL-7B-Instruct,
+# дообученном на ~250K страницах. Имеется готовый CLI-пакет `olmocr`.
+# Чекпоинт: allenai/olmOCR-7B-0225-preview
+
+model:
+  name: olmocr
+  hf_repo: allenai/olmOCR-7B-0225-preview
+  trust_remote_code: false
+  torch_dtype: bfloat16
+  device_map: auto
+
+inference:
+  # olmOCR использует структурированный prompt с anchor-текстом из poppler
+  use_anchor_text: true
+  anchor_target_length: 4000
+  max_new_tokens: 3000
+  temperature: 0.1
+  pipeline_concurrency: 1      # на одной GPU
+
+dataset:
+  name: omnidocbench
+  subset_size: 100
+  split: test
+
+output:
+  results_dir: results/olmocr
+  save_format: jsonl

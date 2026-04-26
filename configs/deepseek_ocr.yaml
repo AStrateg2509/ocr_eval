@@ -1,0 +1,27 @@
+# DeepSeek-OCR — модель из релиза 2025 г.
+# Чекпоинт: deepseek-ai/DeepSeek-OCR  (~3B параметров, поддерживает HF transformers)
+
+model:
+  name: deepseek_ocr
+  hf_repo: deepseek-ai/DeepSeek-OCR
+  trust_remote_code: true
+  torch_dtype: bfloat16        # на T4 поменять на float16
+  device_map: auto
+
+inference:
+  prompt: "<image>\n<|grounding|>Convert the document to markdown."
+  base_size: 1024              # длинная сторона при ресайзе
+  image_size: 640              # размер тайла
+  crop_mode: true              # тайлинг для длинных страниц
+  max_new_tokens: 8192
+  test_compress: true
+
+dataset:
+  name: omnidocbench
+  subset_size: 100             # урезаем для Colab
+  split: test
+  categories: [text, table, formula, layout]
+
+output:
+  results_dir: results/deepseek_ocr
+  save_format: jsonl           # одна строка JSON на пример
