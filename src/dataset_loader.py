@@ -2,37 +2,30 @@
 Загрузчик OmniDocBench для практической части НИР.
 
 OmniDocBench — open-source бенчмарк (opendatalab/OmniDocBench, v1.6).
-В Colab/Kaggle полный датасет распаковывается ≈3.5 ГБ; ноутбуки берут
+В Colab/Kaggle полный датасет распаковывается ~3.5 ГБ; ноутбуки берут
 небольшое подмножество, чтобы уложиться в бесплатные лимиты.
 
-Реальная структура OmniDocBench.json:
+Структура репозитория HuggingFace:
+    OmniDocBench.json
+    images/<filename>   <- все картинки в одной папке, без подпапок
+
+Структура OmniDocBench.json:
     [
       {
         "page_info": {
             "image_path": "page-xxxx.png",   <- только имя файла, без images/
             "page_no": 0,
-            "height": 2339, "width": 1653,
             "page_attribute": {
                 "data_source": "academic_literature",
                 "language": "english",
-                "layout": "single_column",
-                "subset": "v1.5"
             }
         },
         "layout_dets": [
-            {"category_type": "text_block"|"equation_isolated"|"table"|...,
-             "poly": [x1,y1,...],
-             "text": "...",
-             "latex": "...",
-             "html": "..."},
+            {"category_type": "text_block"|"table"|"equation_isolated"|...,
+             "text": "...", "latex": "...", "html": "..."},
         ],
-        "extra": {"relation": []}
       }, ...
     ]
-
-Структура репозитория HuggingFace:
-    OmniDocBench.json
-    images/<filename>     <- все картинки в одной папке, без подпапок
 """
 
 from __future__ import annotations
@@ -41,6 +34,8 @@ import json
 import os
 import random
 import time
+import urllib.request
+import urllib.error
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, List, Optional
@@ -48,7 +43,8 @@ from typing import Iterator, List, Optional
 from PIL import Image
 
 
-REPO_ID = "opendatalab/OmniDocBench"
+# HuggingFace CDN — прямые ссылки, без API-токенов, без rate limit на токены
+HF_BASE = "https://huggingface.co/datasets/opendatalab/OmniDocBench/resolve/main"
 
 
 # -------- структуры --------
@@ -81,44 +77,61 @@ class GroundTruth:
 
 # -------- скачивание --------
 
-def _hf_download_with_retry(filename: str, local_dir: str,
-                             max_retries: int = 8) -> Path:
+def _http_download(url: str, dest: Path, max_retries: int = 6,
+                   hf_token: Optional[str] = None) -> None:
     """
-    Скачивает один файл из репо с экспоненциальным backoff при 429.
+    Скачивает файл напрямую по HTTP, без HuggingFace Python SDK.
+    Обходит rate limit на xet-read-token — используется CDN-ссылка.
+    При 429 или 503 — экспоненциальный backoff.
     """
-    from huggingface_hub import hf_hub_download
+    headers = {"User-Agent": "ocr-eval/1.0"}
+    if hf_token:
+        headers["Authorization"] = f"Bearer {hf_token}"
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
 
     for attempt in range(max_retries):
         try:
-            return Path(hf_hub_download(
-                repo_id=REPO_ID,
-                filename=filename,
-                repo_type="dataset",
-                local_dir=local_dir,
-            ))
-        except Exception as e:
-            if "429" in str(e) and attempt < max_retries - 1:
-                wait = min(30 * (2 ** attempt), 300)
-                print(f"  429 rate limit -- жду {wait}s (попытка {attempt + 1}/{max_retries})")
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as resp, \
+                 open(tmp, "wb") as f:
+                while chunk := resp.read(1 << 20):  # 1 MB chunks
+                    f.write(chunk)
+            tmp.rename(dest)
+            return
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 503) and attempt < max_retries - 1:
+                wait = min(15 * (2 ** attempt), 240)  # 15, 30, 60, 120, 240
+                print(f"  HTTP {e.code} — жду {wait}s (попытка {attempt+1}/{max_retries})")
                 time.sleep(wait)
             else:
                 raise
-    raise RuntimeError(f"Не удалось скачать {filename} после {max_retries} попыток")
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 10 * (attempt + 1)
+                print(f"  Ошибка ({e}) — жду {wait}s (попытка {attempt+1}/{max_retries})")
+                time.sleep(wait)
+            else:
+                raise
+        finally:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
 
 
 def download_omnidocbench(target_dir: str | os.PathLike,
-                          source: str = "huggingface") -> Path:
+                          source: str = "huggingface",
+                          hf_token: Optional[str] = None) -> Path:
     """
-    Скачивает OmniDocBench файл за файлом, обходя rate limit HuggingFace (429).
+    Скачивает OmniDocBench через прямые HTTP-ссылки (CDN HuggingFace),
+    полностью обходя HF Python API и его rate limit на xet-read-token.
 
-    Стратегия:
-      1. Скачиваем OmniDocBench.json (разметка) -- 1 запрос.
-      2. Читаем JSON, собираем список нужных image_path.
-      3. Скачиваем только те картинки, которых ещё нет на диске.
-         При 429 -- ждём с экспоненциальным backoff и продолжаем.
+    Прерывание (Ctrl+C) безопасно — повторный запуск продолжит с места остановки.
 
-    Прерывание (Ctrl+C) безопасно -- при повторном запуске уже скачанные
-    файлы пропускаются автоматически.
+    Параметры:
+        target_dir : куда сохранять датасет
+        source     : не используется (оставлен для совместимости)
+        hf_token   : токен HF если репо приватный (здесь публичный, не нужен)
     """
     target = Path(target_dir)
     target.mkdir(parents=True, exist_ok=True)
@@ -128,46 +141,48 @@ def download_omnidocbench(target_dir: str | os.PathLike,
     json_path = target / "OmniDocBench.json"
     if not json_path.exists():
         print("Скачиваем OmniDocBench.json ...")
-        _hf_download_with_retry("OmniDocBench.json", str(target))
-        print("  OK OmniDocBench.json")
+        url = f"{HF_BASE}/OmniDocBench.json"
+        _http_download(url, json_path, hf_token=hf_token)
+        print(f"  OK ({json_path.stat().st_size // 1024} KB)")
     else:
-        print("OmniDocBench.json уже есть, пропускаем.")
+        print(f"OmniDocBench.json уже есть ({json_path.stat().st_size // 1024} KB)")
 
     # 2. Список всех картинок из JSON
     with json_path.open("r", encoding="utf-8") as f:
         raw = json.load(f)
 
-    all_image_names = []
-    for page in raw:
-        name = page.get("page_info", {}).get("image_path", "").strip()
-        if name:
-            all_image_names.append(name)
+    all_names = [
+        p["page_info"]["image_path"].strip()
+        for p in raw
+        if p.get("page_info", {}).get("image_path", "").strip()
+    ]
+    total = len(all_names)
+    missing = [n for n in all_names if not (target / "images" / n).exists()]
+    print(f"Страниц в датасете: {total} | уже есть: {total - len(missing)} | скачать: {len(missing)}")
 
-    total = len(all_image_names)
-    print(f"Всего страниц в датасете: {total}")
+    if not missing:
+        print("Всё уже скачано!")
+        return target
 
-    # 3. Скачиваем только отсутствующие
-    missing = [n for n in all_image_names if not (target / "images" / n).exists()]
-    already = total - len(missing)
-    print(f"Уже скачано: {already}, осталось: {len(missing)}")
-
+    # 3. Скачиваем отсутствующие напрямую через CDN
     errors = []
     for i, name in enumerate(missing, 1):
-        local_path = target / "images" / name
-        if local_path.exists():
+        dest = target / "images" / name
+        if dest.exists():
             continue
-        if i % 100 == 0 or i <= 3:
+        if i <= 3 or i % 200 == 0:
             print(f"  [{i}/{len(missing)}] {name}")
+        url = f"{HF_BASE}/images/{name}"
         try:
-            _hf_download_with_retry(f"images/{name}", str(target))
+            _http_download(url, dest, hf_token=hf_token)
         except Exception as e:
             errors.append(name)
-            print(f"  ERROR {name}: {e}")
+            print(f"  ОШИБКА [{i}] {name}: {e}")
 
-    done = sum(1 for n in all_image_names if (target / "images" / n).exists())
+    done = sum(1 for n in all_names if (target / "images" / n).exists())
     print(f"\nГотово: {done}/{total} картинок на диске.")
     if errors:
-        print(f"Не удалось скачать {len(errors)} файлов: {errors[:5]}{'...' if len(errors) > 5 else ''}")
+        print(f"Не удалось скачать {len(errors)}: {errors[:3]}{'...' if len(errors) > 3 else ''}")
     return target
 
 
@@ -178,9 +193,7 @@ def _aggregate_page(page: dict) -> GroundTruth:
     attr = info.get("page_attribute", {})
 
     raw_name = info.get("image_path", "").strip()
-    # В репо все картинки лежат в images/ без подпапок
     image_path = f"images/{raw_name}" if raw_name else ""
-
     page_id = f"{info.get('page_no', 0)}_{Path(raw_name).stem}"
 
     text_chunks: List[str] = []
@@ -221,22 +234,17 @@ def load_omnidocbench(root: str | os.PathLike,
                       subset_size: Optional[int] = None,
                       seed: int = 42) -> List[GroundTruth]:
     """
-    Загрузить и отфильтровать OmniDocBench. Не тянет картинки в память --
-    возвращает список GroundTruth с относительными путями.
+    Загрузить и отфильтровать OmniDocBench.
 
     Параметры:
         root          : путь к распакованному датасету
-        page_types    : список значений data_source:
-                        {"academic_literature", "book", "PPT2PDF",
-                         "exam_paper", "colorful_textbook", "newspaper",
-                         "magazine", "research_report", "note",
-                         "historical_document"}
-                        None -> все
+        page_types    : {"academic_literature", "book", "PPT2PDF", "exam_paper",
+                         "colorful_textbook", "newspaper", "magazine",
+                         "research_report", "note", "historical_document"} | None
         languages     : ["english", "simplified_chinese", "traditional_chinese",
-                         "en_ch_mixed", "other"]
-                        None -> все
-        subset_size   : ограничение на размер выборки (для Colab)
-        seed          : seed для случайной выборки subset_size
+                         "en_ch_mixed", "other"] | None
+        subset_size   : ограничение на размер выборки
+        seed          : seed для случайной выборки
     """
     root = Path(root)
     json_path = root / "OmniDocBench.json"
@@ -250,12 +258,11 @@ def load_omnidocbench(root: str | os.PathLike,
 
     items = [_aggregate_page(p) for p in raw]
 
-    # Оставляем только страницы с реально существующими файлами
+    # Только страницы с реально существующими файлами
     before = len(items)
     items = [x for x in items if x.image_path and (root / x.image_path).exists()]
-    missing_count = before - len(items)
-    if missing_count:
-        print(f"[load_omnidocbench] пропущено {missing_count} страниц (файл не найден)")
+    if before - len(items):
+        print(f"[load_omnidocbench] пропущено {before - len(items)} страниц без файла на диске")
 
     if page_types:
         items = [x for x in items if x.page_type in set(page_types)]
