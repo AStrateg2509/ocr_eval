@@ -9,12 +9,12 @@ OmniDocBench — open-source бенчмарк (opendatalab/OmniDocBench, v1.6).
     [
       {
         "page_info": {
-            "image_path": "page-xxxx.png",   ← только имя файла, без images/
+            "image_path": "page-xxxx.png",   <- только имя файла, без images/
             "page_no": 0,
             "height": 2339, "width": 1653,
             "page_attribute": {
-                "data_source": "academic_literature",  ← фильтруем по этому
-                "language": "english",                 ← и по этому
+                "data_source": "academic_literature",
+                "language": "english",
                 "layout": "single_column",
                 "subset": "v1.5"
             }
@@ -23,12 +23,16 @@ OmniDocBench — open-source бенчмарк (opendatalab/OmniDocBench, v1.6).
             {"category_type": "text_block"|"equation_isolated"|"table"|...,
              "poly": [x1,y1,...],
              "text": "...",
-             "latex": "...",   ← для формул
-             "html": "..."},   ← для таблиц
+             "latex": "...",
+             "html": "..."},
         ],
         "extra": {"relation": []}
       }, ...
     ]
+
+Структура репозитория HuggingFace:
+    OmniDocBench.json
+    images/<filename>     <- все картинки в одной папке, без подпапок
 """
 
 from __future__ import annotations
@@ -36,11 +40,15 @@ from __future__ import annotations
 import json
 import os
 import random
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, List, Optional
 
 from PIL import Image
+
+
+REPO_ID = "opendatalab/OmniDocBench"
 
 
 # -------- структуры --------
@@ -50,7 +58,7 @@ class GroundTruth:
     """Единый формат ground-truth, удобный для сравнения с предсказаниями моделей."""
 
     page_id: str
-    image_path: str
+    image_path: str       # относительный путь от корня датасета, напр. "images/page-xxx.png"
     page_type: str
     language: str
     full_text: str = ""
@@ -73,86 +81,107 @@ class GroundTruth:
 
 # -------- скачивание --------
 
+def _hf_download_with_retry(filename: str, local_dir: str,
+                             max_retries: int = 8) -> Path:
+    """
+    Скачивает один файл из репо с экспоненциальным backoff при 429.
+    """
+    from huggingface_hub import hf_hub_download
+
+    for attempt in range(max_retries):
+        try:
+            return Path(hf_hub_download(
+                repo_id=REPO_ID,
+                filename=filename,
+                repo_type="dataset",
+                local_dir=local_dir,
+            ))
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                wait = min(30 * (2 ** attempt), 300)
+                print(f"  429 rate limit -- жду {wait}s (попытка {attempt + 1}/{max_retries})")
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError(f"Не удалось скачать {filename} после {max_retries} попыток")
+
+
 def download_omnidocbench(target_dir: str | os.PathLike,
                           source: str = "huggingface") -> Path:
     """
-    Скачивает OmniDocBench. Поддерживаемые источники:
-      * "huggingface" — opendatalab/OmniDocBench  (рекомендуется в Colab)
-      * "github"      — clone репозитория и его release-архива
+    Скачивает OmniDocBench файл за файлом, обходя rate limit HuggingFace (429).
 
-    Возвращает Path к распакованной корневой директории.
+    Стратегия:
+      1. Скачиваем OmniDocBench.json (разметка) -- 1 запрос.
+      2. Читаем JSON, собираем список нужных image_path.
+      3. Скачиваем только те картинки, которых ещё нет на диске.
+         При 429 -- ждём с экспоненциальным backoff и продолжаем.
+
+    Прерывание (Ctrl+C) безопасно -- при повторном запуске уже скачанные
+    файлы пропускаются автоматически.
     """
     target = Path(target_dir)
     target.mkdir(parents=True, exist_ok=True)
+    (target / "images").mkdir(exist_ok=True)
 
-    if (target / "OmniDocBench.json").exists():
-        return target  # уже скачано
+    # 1. JSON-разметка
+    json_path = target / "OmniDocBench.json"
+    if not json_path.exists():
+        print("Скачиваем OmniDocBench.json ...")
+        _hf_download_with_retry("OmniDocBench.json", str(target))
+        print("  OK OmniDocBench.json")
+    else:
+        print("OmniDocBench.json уже есть, пропускаем.")
 
-    if source == "huggingface":
+    # 2. Список всех картинок из JSON
+    with json_path.open("r", encoding="utf-8") as f:
+        raw = json.load(f)
+
+    all_image_names = []
+    for page in raw:
+        name = page.get("page_info", {}).get("image_path", "").strip()
+        if name:
+            all_image_names.append(name)
+
+    total = len(all_image_names)
+    print(f"Всего страниц в датасете: {total}")
+
+    # 3. Скачиваем только отсутствующие
+    missing = [n for n in all_image_names if not (target / "images" / n).exists()]
+    already = total - len(missing)
+    print(f"Уже скачано: {already}, осталось: {len(missing)}")
+
+    errors = []
+    for i, name in enumerate(missing, 1):
+        local_path = target / "images" / name
+        if local_path.exists():
+            continue
+        if i % 100 == 0 or i <= 3:
+            print(f"  [{i}/{len(missing)}] {name}")
         try:
-            from huggingface_hub import snapshot_download
-        except ImportError as e:
-            raise RuntimeError(
-                "huggingface_hub не установлен. pip install huggingface-hub"
-            ) from e
+            _hf_download_with_retry(f"images/{name}", str(target))
+        except Exception as e:
+            errors.append(name)
+            print(f"  ERROR {name}: {e}")
 
-        snapshot_download(
-            repo_id="opendatalab/OmniDocBench",
-            repo_type="dataset",
-            local_dir=str(target),
-            local_dir_use_symlinks=False,
-        )
-        return target
-
-    if source == "github":
-        import subprocess
-        subprocess.run(
-            ["git", "clone", "--depth", "1",
-             "https://github.com/opendatalab/OmniDocBench", str(target)],
-            check=True,
-        )
-        return target
-
-    raise ValueError(f"Unknown source: {source}")
+    done = sum(1 for n in all_image_names if (target / "images" / n).exists())
+    print(f"\nГотово: {done}/{total} картинок на диске.")
+    if errors:
+        print(f"Не удалось скачать {len(errors)} файлов: {errors[:5]}{'...' if len(errors) > 5 else ''}")
+    return target
 
 
 # -------- парсинг --------
 
-def _build_image_index(root: Path) -> dict[str, str]:
-    """
-    Рекурсивно обходит root и строит словарь {filename -> relative_path}.
-    Нужен потому что HuggingFace раскладывает картинки по подпапкам
-    (images/docstructbench/, images/arxivpaper/ и т.д.), а в JSON хранится
-    только голое имя файла.
-    """
-    index: dict[str, str] = {}
-    for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
-        for p in root.rglob(ext):
-            # При коллизии имён побеждает первый найденный файл
-            if p.name not in index:
-                index[p.name] = str(p.relative_to(root))
-    return index
-
-
-def _aggregate_page(page: dict, image_index: dict[str, str] | None = None) -> GroundTruth:
+def _aggregate_page(page: dict) -> GroundTruth:
     info = page.get("page_info", {})
-    # Реальные поля живут в page_attribute, а не напрямую в page_info
     attr = info.get("page_attribute", {})
 
-    raw_image_path = info.get("image_path", "")
-    filename = Path(raw_image_path).name  # берём только имя файла
+    raw_name = info.get("image_path", "").strip()
+    # В репо все картинки лежат в images/ без подпапок
+    image_path = f"images/{raw_name}" if raw_name else ""
 
-    # Приоритеты разрешения пути:
-    # 1. Индекс реальных файлов на диске (самый надёжный)
-    # 2. Стандартный префикс images/ (fallback без индекса)
-    if image_index is not None and filename in image_index:
-        image_path = image_index[filename]
-    elif raw_image_path.startswith("images/"):
-        image_path = raw_image_path
-    else:
-        image_path = "images/" + filename
-
-    page_id = f"{info.get('page_no', 0)}_{Path(raw_image_path).stem}"
+    page_id = f"{info.get('page_no', 0)}_{Path(raw_name).stem}"
 
     text_chunks: List[str] = []
     tables: List[str] = []
@@ -168,19 +197,17 @@ def _aggregate_page(page: dict, image_index: dict[str, str] | None = None) -> Gr
         })
         if cat in {"text_block", "title", "header", "footer", "caption"}:
             text_chunks.append(det.get("text", ""))
-        elif cat in {"table"}:
+        elif cat == "table":
             tables.append(det.get("html") or det.get("text", ""))
-        elif cat in {"equation_isolated", "equation_inline",
-                     "equation_semantic",
+        elif cat in {"equation_isolated", "equation_inline", "equation_semantic",
                      "formula", "isolate_formula", "inline_formula"}:
-            # Формулы хранятся в поле "latex", не "text"
             formulas.append(det.get("latex") or det.get("text", ""))
 
     return GroundTruth(
         page_id=page_id,
         image_path=image_path,
-        page_type=attr.get("data_source", "unknown"),   # ← было info.get("page_type")
-        language=attr.get("language", "unknown"),        # ← было info.get("language")
+        page_type=attr.get("data_source", "unknown"),
+        language=attr.get("language", "unknown"),
         full_text="\n".join(t for t in text_chunks if t),
         tables_html=tables,
         formulas=formulas,
@@ -194,7 +221,7 @@ def load_omnidocbench(root: str | os.PathLike,
                       subset_size: Optional[int] = None,
                       seed: int = 42) -> List[GroundTruth]:
     """
-    Загрузить и отфильтровать OmniDocBench. Не тянет картинки в память —
+    Загрузить и отфильтровать OmniDocBench. Не тянет картинки в память --
     возвращает список GroundTruth с относительными путями.
 
     Параметры:
@@ -204,10 +231,10 @@ def load_omnidocbench(root: str | os.PathLike,
                          "exam_paper", "colorful_textbook", "newspaper",
                          "magazine", "research_report", "note",
                          "historical_document"}
-                        None → все
+                        None -> все
         languages     : ["english", "simplified_chinese", "traditional_chinese",
                          "en_ch_mixed", "other"]
-                        None → все
+                        None -> все
         subset_size   : ограничение на размер выборки (для Colab)
         seed          : seed для случайной выборки subset_size
     """
@@ -221,16 +248,21 @@ def load_omnidocbench(root: str | os.PathLike,
     with json_path.open("r", encoding="utf-8") as f:
         raw = json.load(f)
 
-    # Строим индекс один раз — O(файлы на диске), зато все пути гарантированно верные
-    image_index = _build_image_index(root)
-    print(f"[dataset_loader] индекс изображений: {len(image_index)} файлов найдено в {root}")
+    items = [_aggregate_page(p) for p in raw]
 
-    items = [_aggregate_page(p, image_index) for p in raw]
+    # Оставляем только страницы с реально существующими файлами
+    before = len(items)
+    items = [x for x in items if x.image_path and (root / x.image_path).exists()]
+    missing_count = before - len(items)
+    if missing_count:
+        print(f"[load_omnidocbench] пропущено {missing_count} страниц (файл не найден)")
 
     if page_types:
         items = [x for x in items if x.page_type in set(page_types)]
     if languages:
         items = [x for x in items if x.language in set(languages)]
+
+    print(f"[load_omnidocbench] после фильтрации: {len(items)} страниц")
 
     if subset_size and subset_size < len(items):
         rng = random.Random(seed)
