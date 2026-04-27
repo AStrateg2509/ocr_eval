@@ -1,20 +1,20 @@
-# Базовые зависимости для запуска OCR-моделей в Colab / Kaggle
-# Версии подобраны для совместимости с CUDA 12.1 (Colab T4/A100/L4)
-
-# --- ядро ---
-torch>=2.1.0
-torchvision>=0.16.0
-transformers>=4.40.0
+# --- ядро с фиксированными версиями для совместимости ---
+torch==2.4.0
+torchvision==0.19.0
+transformers~=4.57.6
 accelerate>=0.30.0
 sentencepiece>=0.2.0
 einops>=0.7.0
 timm>=0.9.16
 safetensors>=0.4.2
-addict
+addict~=2.4.0
+
+# --- flash-attention (устанавливается отдельно!) ---
+# flash-attn>=2.7.0 - устанавливается отдельной командой
 
 # --- работа с PDF / изображениями ---
 pdf2image>=1.17.0
-pillow>=10.2.0
+pillow~=12.1.0
 opencv-python-headless>=4.9.0.80
 PyMuPDF>=1.23.26
 
@@ -31,10 +31,10 @@ nltk>=3.8.1
 sacrebleu>=2.4.0
 editdistance>=0.8.1
 rapidfuzz>=3.6.2
-apted>=1.0.3        # для TEDS (table edit distance similarity)
+apted>=1.0.3
 distance>=0.1.3
-zss>=1.2.0          # zhang-shasha tree edit distance
-shapely>=2.0.3      # IoU полигонов для layout
+zss>=1.2.0
+shapely>=2.0.3
 
 # --- визуализация / отчёты ---
 matplotlib>=3.8.2
@@ -43,11 +43,8 @@ plotly>=5.20.0
 jupyter>=1.0.0
 ipywidgets>=8.1.2
 
-# --- модели VLM (некоторые загружаются через trust_remote_code) ---
-qwen-vl-utils>=0.0.8     # утилиты для qwen-vl-семейства, которое использует MonkeyOCR/DocOwl
-#flash-attn; platform_system != "Darwin"   # опционально, ускоряет инференс на A100/L4
+# --- модели VLM ---
+qwen-vl-utils>=0.0.8
 
-# --- olmOCR-специфика ---
-# olmOCR в Colab проще ставить через `pip install olmocr` после системных deps
-# (poppler-utils, ttf-mscorefonts-installer) — см. notebooks/04_olmocr.ipynb
+# --- olmOCR ---
 olmocr>=0.1.45 ; python_version >= "3.10"
