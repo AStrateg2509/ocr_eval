@@ -8,6 +8,7 @@ model:
   trust_remote_code: true
   torch_dtype: float16          # P100 не любит bf16
   device_map: auto
+  attn_implementation: eager
 
 inference:
   prompt: "Convert this document page to markdown. Preserve tables as HTML and equations as LaTeX."
