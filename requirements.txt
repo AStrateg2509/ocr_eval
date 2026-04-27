@@ -45,7 +45,7 @@ ipywidgets>=8.1.2
 
 # --- модели VLM (некоторые загружаются через trust_remote_code) ---
 qwen-vl-utils>=0.0.8     # утилиты для qwen-vl-семейства, которое использует MonkeyOCR/DocOwl
-flash-attn; platform_system != "Darwin"   # опционально, ускоряет инференс на A100/L4
+#flash-attn; platform_system != "Darwin"   # опционально, ускоряет инференс на A100/L4
 
 # --- olmOCR-специфика ---
 # olmOCR в Colab проще ставить через `pip install olmocr` после системных deps
