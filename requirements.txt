@@ -1,5 +1,6 @@
 # --- ядро с фиксированными версиями для совместимости ---
 transformers~=4.47.0
+torchaudio == 2.6.0
 accelerate>=0.30.0
 sentencepiece>=0.2.0
 einops>=0.7.0
