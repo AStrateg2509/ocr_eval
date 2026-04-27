@@ -10,6 +10,7 @@ sentencepiece>=0.2.0
 einops>=0.7.0
 timm>=0.9.16
 safetensors>=0.4.2
+addict
 
 # --- работа с PDF / изображениями ---
 pdf2image>=1.17.0
