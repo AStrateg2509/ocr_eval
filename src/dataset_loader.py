@@ -36,6 +36,7 @@ import random
 import time
 import urllib.request
 import urllib.error
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator, List, Optional
@@ -45,6 +46,25 @@ from PIL import Image
 
 # HuggingFace CDN — прямые ссылки, без API-токенов, без rate limit на токены
 HF_BASE = "https://huggingface.co/datasets/opendatalab/OmniDocBench/resolve/main"
+
+
+def _make_url(path_in_repo: str) -> str:
+    """
+    Строит корректный CDN-URL для файла из репозитория.
+
+    Имена файлов в JSON могут быть:
+      - уже URL-encoded: "file%20name.jpg", "path%2Ffile.jpg"
+      - с пробелами:     "PPT_13 fallacies_page_001.png"
+      - обычными:        "page-xxxx.png"
+
+    Алгоритм: сначала декодируем (убираем существующие %XX),
+    затем кодируем заново через quote — так пробелы и спецсимволы
+    превращаются в %XX ровно один раз, без двойного кодирования.
+    """
+    decoded = urllib.parse.unquote(path_in_repo)
+    # safe='/' чтобы не кодировать разделитель папок
+    encoded = urllib.parse.quote(decoded, safe="/")
+    return f"{HF_BASE}/{encoded}"
 
 
 # -------- структуры --------
@@ -101,6 +121,8 @@ def _http_download(url: str, dest: Path, max_retries: int = 6,
             tmp.rename(dest)
             return
         except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise  # постоянная ошибка, нет смысла ретраить
             if e.code in (429, 503) and attempt < max_retries - 1:
                 wait = min(15 * (2 ** attempt), 240)  # 15, 30, 60, 120, 240
                 print(f"  HTTP {e.code} — жду {wait}s (попытка {attempt+1}/{max_retries})")
@@ -108,6 +130,8 @@ def _http_download(url: str, dest: Path, max_retries: int = 6,
             else:
                 raise
         except Exception as e:
+            if "control characters" in str(e) or "invalid" in str(e).lower():
+                raise  # постоянная ошибка кодирования, нет смысла ретраить
             if attempt < max_retries - 1:
                 wait = 10 * (attempt + 1)
                 print(f"  Ошибка ({e}) — жду {wait}s (попытка {attempt+1}/{max_retries})")
@@ -141,7 +165,7 @@ def download_omnidocbench(target_dir: str | os.PathLike,
     json_path = target / "OmniDocBench.json"
     if not json_path.exists():
         print("Скачиваем OmniDocBench.json ...")
-        url = f"{HF_BASE}/OmniDocBench.json"
+        url = _make_url("OmniDocBench.json")
         _http_download(url, json_path, hf_token=hf_token)
         print(f"  OK ({json_path.stat().st_size // 1024} KB)")
     else:
@@ -172,7 +196,7 @@ def download_omnidocbench(target_dir: str | os.PathLike,
             continue
         if i <= 3 or i % 200 == 0:
             print(f"  [{i}/{len(missing)}] {name}")
-        url = f"{HF_BASE}/images/{name}"
+        url = _make_url(f"images/{name}")
         try:
             _http_download(url, dest, hf_token=hf_token)
         except Exception as e:
