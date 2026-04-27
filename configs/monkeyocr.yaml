@@ -1,25 +1,2 @@
-# MonkeyOCR — структурно-ориентированная модель, использует SRR-парадигму
-# (Structure → Recognition → Relation).
-# Чекпоинт: echo840/MonkeyOCR  (3B / 7B варианты)
-
-model:
-  name: monkeyocr
-  hf_repo: echo840/MonkeyOCR
-  trust_remote_code: true
-  torch_dtype: bfloat16
-  device_map: auto
-
-inference:
-  task: full_page              # варианты: full_page | text | table | formula
-  prompt: null                 # MonkeyOCR использует встроенные task-prompts
-  max_new_tokens: 6144
-  do_sample: false
-
-dataset:
-  name: omnidocbench
-  subset_size: 100
-  split: test
-
-output:
-  results_dir: results/monkeyocr
-  save_format: jsonl
+# DEPRECATED — модель исключена из сравнения.
+# Удалить через `bash cleanup.sh` или `git rm configs/monkeyocr.yaml`.

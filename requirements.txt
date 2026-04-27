@@ -1,49 +1,64 @@
-# --- ядро с фиксированными версиями для совместимости ---
-transformers~=4.47.0
-torchaudio == 2.6.0
-accelerate>=0.30.0
+# Зависимости для запуска в Kaggle (Tesla P100, CUDA 12.x, Python 3.10/3.11/3.12).
+# Версии зафиксированы — это критично, потому что DeepSeek-OCR / LightOnOCR
+# используют trust_remote_code и завязаны на конкретные API-сигнатуры transformers.
+
+# --- ядро ---
+torch==2.10.0
+torchvision==0.21.0
+torchaudio==2.10.0
+transformers==4.47.0
+accelerate>=1.0.0
 sentencepiece>=0.2.0
 einops>=0.7.0
-timm>=0.9.16
-safetensors>=0.4.2
+timm>=1.0.11
+safetensors>=0.4.5
 addict~=2.4.0
-
-# --- flash-attention (устанавливается отдельно!) ---
-# flash-attn>=2.7.0 - устанавливается отдельной командой
 
 # --- работа с PDF / изображениями ---
 pdf2image>=1.17.0
-pillow~=11.1.0
-opencv-python-headless>=4.9.0.80
-PyMuPDF>=1.23.26
+pillow>=10.4.0
+opencv-python-headless>=4.10.0.84
+PyMuPDF>=1.24.10
 
 # --- датасет / I-O ---
-datasets>=2.18.0
-huggingface-hub>=0.23.0
+datasets>=3.0.0
+huggingface-hub>=0.26.0
 pyyaml>=6.0.1
-tqdm>=4.66.2
-pandas>=2.1.4
+tqdm>=4.66.4
+pandas>=2.2.0
 numpy>=1.26.4
 
-# --- метрики OCR / Layout ---
+# --- метрики OCR / Layout (используется на следующем шаге) ---
 nltk>=3.8.1
 sacrebleu>=2.4.0
 editdistance>=0.8.1
-rapidfuzz>=3.6.2
-apted>=1.0.3
+rapidfuzz>=3.10.0
+apted>=1.0.3            # для TEDS
 distance>=0.1.3
 zss>=1.2.0
-shapely>=2.0.3
+shapely>=2.0.6
 
-# --- визуализация / отчёты ---
-matplotlib>=3.8.2
+# --- визуализация ---
+matplotlib>=3.9.0
 seaborn>=0.13.2
-plotly>=5.20.0
-jupyter>=1.0.0
-ipywidgets>=8.1.2
+plotly>=5.24.0
+ipywidgets>=8.1.5
 
-# --- модели VLM ---
-qwen-vl-utils>=0.0.8
+# --- VLM-утилиты ---
+qwen-vl-utils>=0.0.10
 
-# --- olmOCR ---
+# --- olmOCR-специфика ---
+# poppler-utils ставится через apt (см. ноутбук).
 olmocr>=0.1.45 ; python_version >= "3.10"
+
+# --- flash-attention ---
+# На Kaggle P100 (Pascal sm_60) flash-attn НЕ поддерживается — пропускаем.
+# На Ampere/Hopper/Ada (Colab L4/A100/H100) можно поставить готовое колесо для
+# torch 2.6.0 + cu12 + cp312 командой:
+#
+#   !pip install --no-deps --force-reinstall \
+#     https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.1.post4/flash_attn-2.7.1.post4+cu12torch2.6cxx11abiFALSE-cp312-cp312-linux_x86_64.whl \
+#     --no-build-isolation
+#
+# Для других пар (cp310/cp311 и т. п.) — найти соответствующее колесо там же
+# в Releases репозитория Dao-AILab/flash-attention.

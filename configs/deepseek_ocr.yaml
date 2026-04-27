@@ -1,27 +1,36 @@
-# DeepSeek-OCR — модель из релиза 2025 г.
-# Чекпоинт: deepseek-ai/DeepSeek-OCR  (~3B параметров, поддерживает HF transformers)
+# DeepSeek-OCR (релиз 2025) — мульти-модальная OCR-модель, ~3B параметров.
+# Чекпоинт: deepseek-ai/DeepSeek-OCR
+# API: model.infer(tokenizer, prompt=..., image_file=..., output_path=...,
+#                  base_size=..., image_size=..., crop_mode=...,
+#                  save_results=True, test_compress=True)
+#
+# !!! Важно: метод НЕ возвращает markdown как строку — он пишет файл
+# `<output_path>/result.mmd`. Поэтому ставим save_results: true и читаем
+# результат с диска в коде ноутбука.
 
 model:
   name: deepseek_ocr
   hf_repo: deepseek-ai/DeepSeek-OCR
   trust_remote_code: true
-  torch_dtype: bfloat16        # на T4 поменять на float16
-  device_map: auto
+  torch_dtype: float16          # P100 → fp16
+  device_map: cuda              # явная привязка, чтобы не было CPU-частей
 
 inference:
   prompt: "<image>\n<|grounding|>Convert the document to markdown."
-  base_size: 1024              # длинная сторона при ресайзе
-  image_size: 640              # размер тайла
-  crop_mode: true              # тайлинг для длинных страниц
+  base_size: 1024
+  image_size: 640
+  crop_mode: true
   max_new_tokens: 8192
+  save_results: true            # ← без этого result.mmd не появится
   test_compress: true
+  result_filename: result.mmd   # имя файла, в который DeepSeek-OCR пишет markdown
 
 dataset:
   name: omnidocbench
-  subset_size: 100             # урезаем для Colab
+  subset_size: 100
   split: test
   categories: [text, table, formula, layout]
 
 output:
   results_dir: results/deepseek_ocr
-  save_format: jsonl           # одна строка JSON на пример
+  save_format: jsonl

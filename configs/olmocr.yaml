@@ -1,21 +1,29 @@
-# olmOCR от AllenAI — пайплайн, основанный на Qwen2-VL-7B-Instruct,
-# дообученном на ~250K страницах. Имеется готовый CLI-пакет `olmocr`.
+# olmOCR от AllenAI — Qwen2-VL-7B, дообученный на 250K страницах.
 # Чекпоинт: allenai/olmOCR-7B-0225-preview
+#
+# !!! ВАЖНО для Kaggle P100 !!!
+# Tesla P100 (sm_60, 16 ГБ) имеет два ограничения:
+#   • не поддерживает FlashAttention (нужна Ampere+)  → attn_implementation="sdpa"
+#   • bf16 работает медленно/неточно                   → torch_dtype=float16
+# Под 16 ГБ VRAM семёрку Qwen2-VL вмещаем с device_map="auto" и offload-активациями.
+# Если ловите OOM — урежьте subset_size и/или max_new_tokens.
 
 model:
   name: olmocr
   hf_repo: allenai/olmOCR-7B-0225-preview
   trust_remote_code: false
-  torch_dtype: bfloat16
+  torch_dtype: float16
   device_map: auto
+  attn_implementation: sdpa     # вместо flash_attention_2
+  low_cpu_mem_usage: true
 
 inference:
-  # olmOCR использует структурированный prompt с anchor-текстом из poppler
-  use_anchor_text: true
-  anchor_target_length: 4000
-  max_new_tokens: 3000
-  temperature: 0.1
-  pipeline_concurrency: 1      # на одной GPU
+  use_anchor_text: false        # на OmniDocBench у нас уже PNG, без PDF
+  max_new_tokens: 2048          # на P100 с этим объёмом модели — компромисс
+  temperature: 0.0              # детерминированно
+  pipeline_concurrency: 1
+  # уменьшение картинки: 7B на P100 + 2048 px высоты ≈ край VRAM
+  max_image_long_side: 1280
 
 dataset:
   name: omnidocbench
