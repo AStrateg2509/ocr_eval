@@ -1,6 +1,4 @@
 # --- ядро с фиксированными версиями для совместимости ---
-torch==2.4.0
-torchvision==0.19.0
 transformers~=4.57.6
 accelerate>=0.30.0
 sentencepiece>=0.2.0
@@ -14,7 +12,7 @@ addict~=2.4.0
 
 # --- работа с PDF / изображениями ---
 pdf2image>=1.17.0
-pillow~=12.1.0
+pillow~=11.1.0
 opencv-python-headless>=4.9.0.80
 PyMuPDF>=1.23.26
 

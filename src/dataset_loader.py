@@ -118,18 +118,39 @@ def download_omnidocbench(target_dir: str | os.PathLike,
 
 # -------- парсинг --------
 
-def _aggregate_page(page: dict) -> GroundTruth:
+def _build_image_index(root: Path) -> dict[str, str]:
+    """
+    Рекурсивно обходит root и строит словарь {filename -> relative_path}.
+    Нужен потому что HuggingFace раскладывает картинки по подпапкам
+    (images/docstructbench/, images/arxivpaper/ и т.д.), а в JSON хранится
+    только голое имя файла.
+    """
+    index: dict[str, str] = {}
+    for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+        for p in root.rglob(ext):
+            # При коллизии имён побеждает первый найденный файл
+            if p.name not in index:
+                index[p.name] = str(p.relative_to(root))
+    return index
+
+
+def _aggregate_page(page: dict, image_index: dict[str, str] | None = None) -> GroundTruth:
     info = page.get("page_info", {})
     # Реальные поля живут в page_attribute, а не напрямую в page_info
     attr = info.get("page_attribute", {})
 
     raw_image_path = info.get("image_path", "")
-    # В JSON хранится только имя файла (без папки images/)
-    # Проверяем оба варианта чтобы поддержать возможные будущие версии датасета
-    if raw_image_path and not raw_image_path.startswith("images/"):
-        image_path = "images/" + raw_image_path
-    else:
+    filename = Path(raw_image_path).name  # берём только имя файла
+
+    # Приоритеты разрешения пути:
+    # 1. Индекс реальных файлов на диске (самый надёжный)
+    # 2. Стандартный префикс images/ (fallback без индекса)
+    if image_index is not None and filename in image_index:
+        image_path = image_index[filename]
+    elif raw_image_path.startswith("images/"):
         image_path = raw_image_path
+    else:
+        image_path = "images/" + filename
 
     page_id = f"{info.get('page_no', 0)}_{Path(raw_image_path).stem}"
 
@@ -200,7 +221,11 @@ def load_omnidocbench(root: str | os.PathLike,
     with json_path.open("r", encoding="utf-8") as f:
         raw = json.load(f)
 
-    items = [_aggregate_page(p) for p in raw]
+    # Строим индекс один раз — O(файлы на диске), зато все пути гарантированно верные
+    image_index = _build_image_index(root)
+    print(f"[dataset_loader] индекс изображений: {len(image_index)} файлов найдено в {root}")
+
+    items = [_aggregate_page(p, image_index) for p in raw]
 
     if page_types:
         items = [x for x in items if x.page_type in set(page_types)]
