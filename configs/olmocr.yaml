@@ -1,12 +1,10 @@
 # olmOCR от AllenAI — Qwen2-VL-7B, дообученный на 250K страницах.
 # Чекпоинт: allenai/olmOCR-7B-0225-preview
 #
-# !!! ВАЖНО для Kaggle P100 !!!
-# Tesla P100 (sm_60, 16 ГБ) имеет два ограничения:
-#   • не поддерживает FlashAttention (нужна Ampere+)  → attn_implementation="sdpa"
-#   • bf16 работает медленно/неточно                   → torch_dtype=float16
-# Под 16 ГБ VRAM семёрку Qwen2-VL вмещаем с device_map="auto" и offload-активациями.
-# Если ловите OOM — урежьте subset_size и/или max_new_tokens.
+# Окружение: Kaggle T4 x2 (sm_75, 16+16 ГБ).
+# device_map="auto" автоматически раскладывает 7B-веса между двумя картами,
+# поэтому max_image_long_side можно поднять до 1536 (P100 -> 1280 был тесен).
+# T4 поддерживает flash-attn 2 — включаем его для ~2x ускорения.
 
 model:
   name: olmocr
@@ -14,16 +12,15 @@ model:
   trust_remote_code: false
   torch_dtype: float16
   device_map: auto
-  attn_implementation: sdpa     # вместо flash_attention_2
+  attn_implementation: flash_attention_2   # T4 sm_75; fallback на sdpa в коде
   low_cpu_mem_usage: true
 
 inference:
   use_anchor_text: false        # на OmniDocBench у нас уже PNG, без PDF
-  max_new_tokens: 2048          # на P100 с этим объёмом модели — компромисс
-  temperature: 0.0              # детерминированно
+  max_new_tokens: 3000
+  temperature: 0.0
   pipeline_concurrency: 1
-  # уменьшение картинки: 7B на P100 + 2048 px высоты ≈ край VRAM
-  max_image_long_side: 1280
+  max_image_long_side: 1536     # T4 x2 → больше памяти, можно вернуть качество
 
 dataset:
   name: omnidocbench

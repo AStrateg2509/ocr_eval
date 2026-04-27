@@ -1,14 +1,27 @@
-# LightOnOCR-2-1B — компактная (~1B) OCR-модель от LightOn AI, выпущена 2025.
-# Чекпоинт: lightonai/LightOnOCR-2-1B
-# Использует transformers + processor с chat-шаблоном (image+text → text).
+# LightOnOCR-2-1B — компактная (~1B) OCR-модель от LightOn AI, релиз 2025.
+# Чекпоинт: lightonai/LightOnOCR-2-1B  (Mistral3-based VLM)
+#
+# Стратегия загрузки (см. ноутбук):
+#   1. AutoModelForVision2Seq    — даёт шанс auto_map'у из репо LightOn
+#                                  отработать с trust_remote_code=True;
+#   2. AutoModelForImageTextToText (если он есть в текущей transformers);
+#   3. AutoModelForCausalLM      — на случай, если auto_map указывает туда;
+#   4. Mistral3ForConditionalGeneration — последний резерв.
+#
+# В первой итерации фиксировался Mistral3ForConditionalGeneration —
+# но он попадал в LOAD-REPORT mismatch (vision_encoder vs vision_tower).
+# Через trust_remote_code должен подняться кастомный class из репо LightOn,
+# который ожидает vision_encoder и совпадает с весами.
 
 model:
   name: lightonocr
   hf_repo: lightonai/LightOnOCR-2-1B
   trust_remote_code: true
-  torch_dtype: float16          # P100 не любит bf16
-  device_map: auto
-  attn_implementation: eager
+  torch_dtype: float16          # на T4 fp16 быстрее/безопаснее bf16
+  device_map: auto              # T4 x2 → accelerate сама раскладывает
+  attn_implementation: flash_attention_2   # T4 sm_75 поддерживает FA2;
+                                           # если flash-attn не встал —
+                                           # ноутбук переключит на sdpa
 
 inference:
   prompt: "Convert this document page to markdown. Preserve tables as HTML and equations as LaTeX."

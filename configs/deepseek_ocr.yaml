@@ -7,13 +7,17 @@
 # !!! Важно: метод НЕ возвращает markdown как строку — он пишет файл
 # `<output_path>/result.mmd`. Поэтому ставим save_results: true и читаем
 # результат с диска в коде ноутбука.
+#
+# Окружение: T4 x2 (sm_75). DeepSeek-OCR может тянуть flash-attn через
+# trust_remote_code; на T4 это работает. attn_implementation НЕ форсируется
+# здесь — оставляем дефолт кастомного modeling-кода DeepSeek.
 
 model:
   name: deepseek_ocr
   hf_repo: deepseek-ai/DeepSeek-OCR
   trust_remote_code: true
-  torch_dtype: float16          # P100 → fp16
-  device_map: cuda              # явная привязка, чтобы не было CPU-частей
+  torch_dtype: float16          # bf16 → fp16 для совместимости с потребительскими GPU
+  device_map: auto              # T4 x2 → accelerate сама раскладывает
 
 inference:
   prompt: "<image>\n<|grounding|>Convert the document to markdown."
@@ -23,7 +27,7 @@ inference:
   max_new_tokens: 8192
   save_results: true            # ← без этого result.mmd не появится
   test_compress: true
-  result_filename: result.mmd   # имя файла, в который DeepSeek-OCR пишет markdown
+  result_filename: result.mmd
 
 dataset:
   name: omnidocbench

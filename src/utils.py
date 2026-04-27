@@ -31,7 +31,7 @@ def load_config(path: str | os.PathLike) -> Dict[str, Any]:
 class JsonlWriter:
     """
     Запись результатов инференса в .jsonl. Открывает файл в режиме 'a',
-    чтобы можно было докатывать выборку поверх предыдущей сессии Colab.
+    чтобы можно было докатывать выборку поверх предыдущей сессии Kaggle/Colab.
     """
 
     def __init__(self, path: str | os.PathLike):
@@ -63,16 +63,51 @@ def read_jsonl(path: str | os.PathLike) -> list[dict]:
     return out
 
 
-def already_processed_ids(path: str | os.PathLike) -> set[str]:
-    """Идентификаторы страниц, уже записанные в JSONL — для возобновления после перезапуска."""
+def already_processed_ids(path: str | os.PathLike,
+                          include_errors: bool = False) -> set[str]:
+    """
+    Идентификаторы страниц, уже записанные в JSONL — для возобновления
+    после перезапуска runtime.
+
+    По умолчанию ошибочные записи (error != null) НЕ считаются обработанными,
+    чтобы при следующем прогоне они переобработались. Если хочется
+    держаться за старое поведение (любой page_id = done), передайте
+    include_errors=True.
+    """
     p = Path(path)
     if not p.exists():
         return set()
     ids: set[str] = set()
     for rec in read_jsonl(p):
+        if rec.get("error") and not include_errors:
+            continue
         if "page_id" in rec:
             ids.add(rec["page_id"])
     return ids
+
+
+def drop_error_records(path: str | os.PathLike) -> dict:
+    """
+    Перезаписать JSONL, исключив строки с error != null.
+
+    Полезно вызывать перед каждым прогоном модели, если предыдущий запуск
+    оставил ошибочные записи (например, из-за бага в загрузке весов).
+    Возвращает {"kept": K, "removed": R}.
+
+    Если файла нет — no-op, возвращает {"kept":0, "removed":0}.
+    """
+    p = Path(path)
+    if not p.exists():
+        return {"kept": 0, "removed": 0}
+    recs = read_jsonl(p)
+    kept = [r for r in recs if not r.get("error")]
+    removed = len(recs) - len(kept)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        for r in kept:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    tmp.replace(p)
+    return {"kept": len(kept), "removed": removed}
 
 
 # -------- время --------
@@ -112,17 +147,40 @@ def cuda_free():
 
 
 def gpu_info() -> str:
+    """Сводка по всем доступным GPU (актуально для Kaggle T4 x2)."""
     try:
         import torch
         if not torch.cuda.is_available():
             return "no CUDA"
-        i = torch.cuda.current_device()
-        name = torch.cuda.get_device_name(i)
-        total = torch.cuda.get_device_properties(i).total_memory / 1024 ** 3
-        used = torch.cuda.memory_allocated(i) / 1024 ** 3
-        return f"{name} | used {used:.2f} / {total:.1f} GiB"
+        n = torch.cuda.device_count()
+        parts = []
+        for i in range(n):
+            name = torch.cuda.get_device_name(i)
+            total = torch.cuda.get_device_properties(i).total_memory / 1024 ** 3
+            used = torch.cuda.memory_allocated(i) / 1024 ** 3
+            cc = torch.cuda.get_device_capability(i)
+            parts.append(f"cuda:{i} {name} sm_{cc[0]}{cc[1]} | {used:.2f}/{total:.1f} GiB")
+        return " ; ".join(parts)
     except Exception as e:
         return f"gpu_info error: {e}"
+
+
+def cuda_capabilities() -> list[tuple[int, int]]:
+    """Список compute capabilities всех видимых GPU."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return []
+        return [torch.cuda.get_device_capability(i) for i in range(torch.cuda.device_count())]
+    except Exception:
+        return []
+
+
+def supports_flash_attention() -> bool:
+    """sm_80+ — full FA2; sm_75 (T4) поддерживает большинство ядер FA2.
+    Возвращаем True для sm_75+, False для P100/V100/Pascal."""
+    caps = cuda_capabilities()
+    return bool(caps) and all(cc[0] >= 7 and (cc[0] > 7 or cc[1] >= 5) for cc in caps)
 
 
 # -------- batch helpers --------
